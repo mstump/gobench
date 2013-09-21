@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"math/rand"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,6 +25,7 @@ var (
 	requests         int64
 	period           int64
 	clients          int
+	hosts            string
 	url              string
 	urlsFilePath     string
 	keepAlive        bool
@@ -33,12 +36,13 @@ var (
 )
 
 type Configuration struct {
-	urls      []string
-	method    string
-	postData  []byte
-	requests  int64
-	period    int64
-	keepAlive bool
+	hosts          []string
+	urls           []string
+	method         string
+	postData       []byte
+	requests       int64
+	period         int64
+	keepAlive      bool
 }
 
 type Result struct {
@@ -82,6 +86,7 @@ func (this *MyConn) Write(b []byte) (n int, err error) {
 func init() {
 	flag.Int64Var(&requests, "r", -1, "Number of requests per client")
 	flag.IntVar(&clients, "c", 100, "Number of concurrent clients")
+	flag.StringVar(&hosts, "h", "", "Optional comma delimited list of HTTP hosts which will be prepended to URLs")
 	flag.StringVar(&url, "u", "", "URL")
 	flag.StringVar(&urlsFilePath, "f", "", "URL's file path (line seperated)")
 	flag.BoolVar(&keepAlive, "k", true, "Do HTTP keep-alive")
@@ -175,11 +180,12 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		urls:      make([]string, 0),
-		method:    "GET",
-		postData:  nil,
-		keepAlive: keepAlive,
-		requests:  int64((1 << 63) - 1)}
+		hosts:          make([]string, 0),
+		urls:           make([]string, 0),
+		method:         "GET",
+		postData:       nil,
+		keepAlive:      keepAlive,
+		requests:       int64((1 << 63) - 1)}
 
 	if period != -1 {
 		configuration.period = period
@@ -212,6 +218,10 @@ func NewConfiguration() *Configuration {
 
 	if url != "" {
 		configuration.urls = append(configuration.urls, url)
+	}
+
+	if hosts != "" {
+		configuration.hosts = strings.Split(hosts, ",")
 	}
 
 	if postDataFilePath != "" {
@@ -255,6 +265,11 @@ func MyClient(result *Result, connectTimeout, readTimeout, writeTimeout time.Dur
 	}
 }
 
+func random(min, max int) int {
+    rand.Seed(time.Now().Unix())
+    return rand.Intn(max - min) + min
+}
+
 func client(configuration *Configuration, result *Result, done *sync.WaitGroup) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -267,8 +282,13 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		time.Duration(readTimeout)*time.Millisecond,
 		time.Duration(writeTimeout)*time.Millisecond)
 
+	hostsLength := len(configuration.hosts)
+
 	for result.requests < configuration.requests {
 		for _, tmpUrl := range configuration.urls {
+			if hostsLength != 0 {
+				tmpUrl = configuration.hosts[random(0, hostsLength)] + tmpUrl
+			}
 			req, _ := http.NewRequest(configuration.method, tmpUrl, bytes.NewReader(configuration.postData))
 
 			if configuration.keepAlive == true {
